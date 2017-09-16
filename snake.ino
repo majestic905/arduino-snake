@@ -11,6 +11,7 @@ const byte SCREEN_MENU = 0;
 const byte SCREEN_ABOUT = 1;
 const byte SCREEN_RECORDS = 2;
 const byte SCREEN_GAME = 3;
+const byte SCREEN_PAUSE = 4;
 byte SCREEN_CURRENT = 0;
 
 const byte MENU_ITEM_GAME = 0;
@@ -36,6 +37,57 @@ struct Record {
   byte level;
   byte len;
 };
+
+struct Node {
+  byte x, y, dir; 
+  struct Node* next;
+};
+
+static unsigned char field[48*84];
+Node *snakeHead, *snakeTail;
+bool gameIsGoing = false;
+
+void clearField() {
+  for (int i = 0; i < 48; ++i)
+    for (int j = 0; j < 84; ++j)
+      field[i*48+j] = 0;
+}
+
+void drawBorders() {
+  for (byte i = 0; i < 84; ++i)
+    field[i] = field[47*84+i] = 0xff;
+  for (byte i = 0; i < 48; ++i)
+    field[i] = field[i*48+83] = 0xff;
+}
+
+void createSnake() {
+  Node *p, *q;
+  snakeTail = (Node*)malloc(sizeof(Node));
+  snakeTail->y = 24;
+  snakeTail->x = 5;
+  snakeTail->dir = PIN_BUTTON_EAST;
+  q = snakeTail;
+
+  for (int i = 0; i < 4; i++) {
+    p = (Node*)malloc(sizeof(Node));
+    p->y = q->y;
+    p->x = q->x+1;
+    p->dir = q->dir;
+    q->next = p;
+    q = p;
+  }
+  
+  p->next = NULL;
+  snakeHead = p;
+}
+
+void drawSnake() {
+  Node* p = snakeTail;
+  while (p->next != NULL) {
+    field[(p->y)*48 + p->x] = 0xff;
+    p = p->next;
+  }
+}
 
 void setup() {
   Serial.begin(9600);
@@ -91,11 +143,11 @@ byte getPressedButton() {
 
 void loop() {
   byte buttonPressed = getPressedButton();
+  
   if (SCREEN_CURRENT == SCREEN_MENU) {
     if (buttonPressed == PIN_BUTTON_SELECT) {
-      if (MENU_ITEM_CURRENT == MENU_ITEM_GAME) {
-        // NOT IMPLEMENTED YET
-      }
+      if (MENU_ITEM_CURRENT == MENU_ITEM_GAME)
+        SCREEN_CURRENT = SCREEN_GAME;
       else if (MENU_ITEM_CURRENT == MENU_ITEM_RECORDS)
         SCREEN_CURRENT = SCREEN_RECORDS;
       else if (MENU_ITEM_CURRENT == MENU_ITEM_ABOUT)
@@ -105,14 +157,18 @@ void loop() {
     } else if (buttonPressed == PIN_BUTTON_SOUTH) {
       MENU_ITEM_CURRENT = (MENU_ITEM_CURRENT+1) % 3;
     }
+    
   } else if (SCREEN_CURRENT == SCREEN_RECORDS) {
     if (buttonPressed != PIN_BUTTON_NONE)
       SCREEN_CURRENT = SCREEN_MENU;
+      
   } else if (SCREEN_CURRENT == SCREEN_ABOUT) {
     if (buttonPressed != PIN_BUTTON_NONE)
       SCREEN_CURRENT = SCREEN_MENU;
+      
   } else if (SCREEN_CURRENT == SCREEN_GAME) {
-    // NOT IMPLEMENTED YET
+    if (buttonPressed != PIN_BUTTON_NONE)
+      SCREEN_CURRENT = SCREEN_MENU;
   }
   
   u8g2.firstPage();
@@ -160,6 +216,19 @@ void loop() {
         u8g2.drawStr(0,46,"der Bibliothek :(");
       } while( u8g2.nextPage() );
       break;
+
+    case SCREEN_GAME:
+      if (!gameIsGoing) {
+        clearField();
+        createSnake();
+        drawBorders();
+        drawSnake();
+        gameIsGoing = true;
+      } else {
+        do {
+          u8g2.drawXBM(0, 0, 48, 84, field);
+        } while ( u8g2.nextPage() );
+      }
   }
 
   delay(75);
