@@ -6,8 +6,6 @@
 #include <nRF24L01.h>
 #include <RF24.h>
 
-// TODO: setting new record (username) functionality
-
 // 1 RST - D12
 // 2 CE - D13
 // 3 DC - D11
@@ -37,11 +35,19 @@ const byte pipe[] = "snake"; // Needs to be the same for communicating between 2
 #define SCREEN_PAUSE 3
 #define SCREEN_OVER 4
 #define SCREEN_LEVEL 5
+#define SCREEN_OPTIONS 6
 byte SCREEN = 0;
 
 #define MENU_ITEM_GAME 0
 #define MENU_ITEM_RECORDS 1
+#define MENU_ITEM_OPTIONS 2
 byte MENU_ITEM = 0;
+
+#define O_MENU_ITEM_LENGTH 0
+#define O_MENU_ITEM_MODE 1
+#define O_MENU_ITEM_SPEED 2
+#define O_MENU_ITEM_BACK 3
+byte O_MENU_ITEM = 0;
 
 #define PIN_NONE 100
 #define PIN_NORTH 2
@@ -56,8 +62,9 @@ byte MENU_ITEM = 0;
 int X_CURRENT = 350, Y_CURRENT = 350;
 
 static byte field[48*11];
-const byte foodMax = 22, defaultSpeed = 8, levelsMax = 4;
-byte foodRow, foodCol, foodTotal = 0, gameSpeed = 100, LEVEL = 100, countdown = 100;
+const byte defaultSpeed = 8, levelsMax = 4;
+byte foodRow, foodMax = 22, foodCol, foodTotal = 0, LEVEL = 100, countdown = 100;
+byte gameSpeedMode = 0, gameSpeed = 100, gameSpeedStep = 3, gameSpeedLevel = 1; // gameSpeedMode: 0 - auto (growing), 1 - const
 static byte levels[4][8][2] = {
   {{B0010000,B0000100}, {B0010000,B0000100}, {B0000000,B0000000}, {B0000000,B0000000}, {B0000000,B0000000}, {B0000000,B0000000}, {B0010000,B0000100}, {B0010000,B0000100}},
   {{B0010010,B0100100}, {B0010010,B0100100}, {B0000000,B0000000}, {B0000000,B0000000}, {B0000000,B0000000}, {B0000000,B0000000}, {B0010010,B0100100}, {B0010010,B0100100}},
@@ -106,7 +113,7 @@ bool onBorderOrBlock(byte row, byte col) {
  return (bool) (levels[LEVEL][r][c/7] & (1 << (6-(c%7))));
 }
 
-bool onSnake (byte row, byte col) {
+bool onSnake(byte row, byte col) {
  Node *p = tail;
  while (p->next != NULL) { // excluding snake's head
    if (p->row == row && p->col == col)
@@ -146,7 +153,7 @@ void createAndSetSnake() {
 
  setBit(q->row, q->col, true);
 
- for (int i = 0; i < 4; i++) {
+ for (int i = 0; i < 3; i++) {
    p = (Node*) malloc(sizeof(Node));
    p->row = q->row;
    p->col = q->col+1;
@@ -203,14 +210,15 @@ void moveSnake() {
 
  if (onBorderOrBlock(head->row, head->col) || onSnake(head->row, head->col)) { // game over
    SCREEN = SCREEN_OVER;
-   
    return;
  } else
    setBit(head->row, head->col, true);
 
  if (head->row == foodRow && head->col == foodCol) { // got food
    ++foodTotal;
-   gameSpeed += 3;
+   if (gameSpeedMode == 0 /* auto */)
+    gameSpeed += gameSpeedStep; // else nothing
+   Serial.println(gameSpeed);
    
    if (foodTotal < foodMax) { // moving forward
      growSnake();
@@ -228,8 +236,10 @@ void moveSnake() {
 void startGame() {
  nameWasSet = false;
  currentSymbol = 0;
- 
+
  gameSpeed = defaultSpeed;
+ if (gameSpeedMode == 1 /* const */)
+    gameSpeed += gameSpeedLevel*3;
  foodTotal = 0;
  
  clearField();
@@ -249,8 +259,6 @@ void shiftRecords() {
     records[0].name[i] = '_';
   records[0].level = LEVEL+1;
   records[0].len = foodTotal;
-  Serial.println(records[0].level);
-  Serial.println(records[0].len);
 }
 
 void writeToEEPROM() {
@@ -262,8 +270,9 @@ void writeToEEPROM() {
 }
 
 void setup() {
- Serial.begin(9600);
  u8g2.begin();
+
+ Serial.begin(9600);
  
  radio.begin();
  radio.openReadingPipe(1, pipe);
@@ -275,8 +284,6 @@ void setup() {
    EEPROM.get(eeAddress, records[i]);
    eeAddress += sizeof(Record);
  }
-
-  Serial.begin(9600);
 
  randomSeed(analogRead(0));
 }
@@ -293,17 +300,20 @@ void loop() {
          LEVEL = 0;
          SCREEN = SCREEN_LEVEL;
        } else if (MENU_ITEM == MENU_ITEM_RECORDS)
-         SCREEN = SCREEN_RECORDS;
+          SCREEN = SCREEN_RECORDS;
+         else if (MENU_ITEM == MENU_ITEM_OPTIONS)
+          SCREEN = SCREEN_OPTIONS;
      } else if (buttonPressed == PIN_NORTH) {
-       MENU_ITEM = (MENU_ITEM == 0 ? 1 : MENU_ITEM-1);
+       MENU_ITEM = (MENU_ITEM == 0 ? 2 : MENU_ITEM-1);
      } else if (buttonPressed == PIN_SOUTH) {
-       MENU_ITEM = (MENU_ITEM+1) % 2; // ибо всего 2 пункта в меню
+       MENU_ITEM = (MENU_ITEM+1) % 3; // ибо всего 2 пункта в меню
      }
    
      do {
        u8g2.setFont(u8g2_font_profont10_mr);
        u8g2.drawStr(10,10,"New Game");
        u8g2.drawStr(10,20,"Records Table");
+       u8g2.drawStr(10,30,"Options");
        u8g2.drawStr(0, (MENU_ITEM+1)*10, "=");
      } while( u8g2.nextPage() );
      delay(80);
@@ -317,7 +327,6 @@ void loop() {
        else if (buttonPressed == PIN_NORTH && head->dir != PIN_SOUTH) head->dir = PIN_NORTH;
        else if (buttonPressed == PIN_SOUTH && head->dir != PIN_NORTH) head->dir = PIN_SOUTH;
        else if (buttonPressed == PIN_WEST  && head->dir != PIN_EAST)  head->dir = PIN_WEST;
-       else ;
  
        moveSnake();
          
@@ -415,16 +424,66 @@ void loop() {
      } while( u8g2.nextPage() );
      delay(50);
      break;
+
+   case SCREEN_OPTIONS:
+     if (buttonPressed == PIN_NORTH)
+       O_MENU_ITEM = (O_MENU_ITEM == 0 ? 3 : O_MENU_ITEM-1);
+     else if (buttonPressed == PIN_SOUTH)
+       O_MENU_ITEM = (O_MENU_ITEM+1) % 4; // ибо всего 4 пункта в меню
+     else if (buttonPressed == PIN_SELECT && O_MENU_ITEM == O_MENU_ITEM_BACK) {
+        O_MENU_ITEM = 0; // первый пункт меню, каким бы он ни был
+        SCREEN = SCREEN_MENU;
+     } else if (O_MENU_ITEM == O_MENU_ITEM_LENGTH) {
+       if (buttonPressed == PIN_WEST)
+          foodMax = (foodMax == 2 ? 2 : foodMax-1);
+       else if (buttonPressed == PIN_EAST)
+          foodMax = (foodMax == 25 ? 25 : foodMax+1);
+     } else if (O_MENU_ITEM == O_MENU_ITEM_MODE) {
+       if (buttonPressed == PIN_WEST || buttonPressed == PIN_EAST)
+          gameSpeedMode = 1-gameSpeedMode;
+     } else if (O_MENU_ITEM == O_MENU_ITEM_SPEED) {
+       if (gameSpeedMode == 0 /* auto */) {
+         if (buttonPressed == PIN_WEST)
+           gameSpeedStep = (gameSpeedStep == 1 ? 1 : gameSpeedStep-1);
+         else if (buttonPressed == PIN_EAST)
+           gameSpeedStep = (gameSpeedStep == 3 ? 3 : gameSpeedStep+1);
+       } else if (gameSpeedMode == 1 /* const */) {
+         if (buttonPressed == PIN_WEST)
+           gameSpeedLevel = (gameSpeedLevel == 1 ? 1 : gameSpeedLevel-1);
+         else if (buttonPressed == PIN_EAST)
+           gameSpeedLevel = (gameSpeedLevel == 12 ? 12 : gameSpeedLevel+1);
+       }
+     }
+
+     byte modeAuto = (gameSpeedMode == 0);
+     do {
+       u8g2.setFont(u8g2_font_profont10_mr);
+       
+       u8g2.drawStr(10, 10, "Max. len:");
+       char len[3]; sprintf(len, "%d", foodMax+3);
+       u8g2.drawStr(60, 10, len);
+       
+       u8g2.drawStr(10, 20, "Sp. mode:");
+       u8g2.drawStr(60, 20, (modeAuto ? "auto" : "const"));
+       
+       u8g2.drawStr(10, 30, (modeAuto ? "Step:" : "Level:"));
+       char spid[3]; sprintf(spid, "%d", (modeAuto ? gameSpeedStep : gameSpeedLevel));
+       u8g2.drawStr(60, 30, spid);
+
+       u8g2.drawStr(10, 40, "Back to menu");
+
+       u8g2.drawStr(0, (O_MENU_ITEM+1)*10, "=");
+     } while( u8g2.nextPage() );
+     delay(50);
+     break;
  }
 }
-
 
 // 48x84
 // 8x16 6-byte
 
 // делим поле 48x84 на прямоугольники по 6 пикселей, получаем поле 8x14, которое можно представить 6-битовыми числами
 // поле 8х14 в свою очереь можно представить массивом 7-битовых чисел 8x2, где каждый установленный бит будет символизировать о наличии блока-препятствия размером 6х6
-
 
 // static byte levels[4][8][2] = {
 //    {{B0010000,B0000100},
@@ -464,4 +523,7 @@ void loop() {
 //     {B0010010,B0100100}}
 // };
 
-
+// 1. пункт меню options
+// 1.1. рамзмер блока змейки 1-3
+// 1.2. скорость: auto/const. если const, то уровни 1-9, если auto, то задавать step
+// 1.3 foodMax задавать
